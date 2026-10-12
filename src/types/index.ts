@@ -199,3 +199,14 @@ export interface AttendanceRecord {
   longitude?: number | null;
   created_at: string;
 }
+
+export interface SystemNotification {
+  id: string;
+  recipient_id: string;
+  title: string;
+  message: string;
+  type: 'info' | 'action_required' | 'approval' | 'warning' | 'error';
+  link?: string | null;
+  is_read: boolean;
+  created_at: string;
+}

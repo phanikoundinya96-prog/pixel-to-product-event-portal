@@ -10,6 +10,8 @@ import {
   Award
 } from 'lucide-react';
 
+import { NotificationBell } from '@/components/common/NotificationBell';
+
 interface NavbarProps {
   currentView: string;
   onNavigate: (view: string) => void;
@@ -125,6 +127,7 @@ export const Navbar: React.FC<NavbarProps> = ({ currentView, onNavigate }) => {
           <div className="flex items-center gap-3">
             {user ? (
               <div className="flex items-center gap-3">
+                <NotificationBell />
                 <div className="text-right hidden sm:block">
                   <div className="flex items-center gap-2 justify-end">
                     <span className="text-xs font-semibold text-white">

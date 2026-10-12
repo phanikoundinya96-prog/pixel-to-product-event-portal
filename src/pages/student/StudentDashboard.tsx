@@ -13,13 +13,17 @@ import {
   CheckCircle2, 
   FileCheck2, 
   MessageSquare, 
-  ShieldCheck 
+  ShieldCheck,
+  Edit3,
+  RotateCcw
 } from 'lucide-react';
 import Badge from '@/components/common/Badge';
 import LoadingSpinner from '@/components/common/LoadingSpinner';
 import { evaluateEligibility } from '@/utils/eligibility';
 import DocumentViewerModal from '@/components/common/DocumentViewerModal';
 import OdRequestModal from '@/components/requests/OdRequestModal';
+import DecisionHistoryModal from '@/components/requests/DecisionHistoryModal';
+import ResubmitModal from '@/components/requests/ResubmitModal';
 
 interface StudentDashboardProps {
   initialEvent?: TechnicalEvent | null;
@@ -36,10 +40,13 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
   const [proctorAssignment, setProctorAssignment] = useState<ProctorAssignment | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // Modals
+  // Modals & Action States
   const [viewerKey, setViewerKey] = useState<string | null>(null);
   const [showApplyModal, setShowApplyModal] = useState<boolean>(!!initialEvent);
   const [selectedEventForModal, setSelectedEventForModal] = useState<TechnicalEvent | null>(initialEvent || null);
+  const [selectedAuditRequest, setSelectedAuditRequest] = useState<ParticipationRequest | null>(null);
+  const [selectedResubmitRequest, setSelectedResubmitRequest] = useState<ParticipationRequest | null>(null);
+  const [withdrawLoading, setWithdrawLoading] = useState<string | null>(null);
 
   useEffect(() => {
     if (initialEvent) {
@@ -97,6 +104,51 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
   useEffect(() => {
     loadStudentData();
   }, [user?.id, profile?.roll_number]);
+
+  const handleWithdraw = async (requestId: string) => {
+    if (!window.confirm('Are you sure you want to withdraw this OD application? This action is permanent.')) {
+      return;
+    }
+    setWithdrawLoading(requestId);
+    try {
+      const { error: rpcErr } = await insforge.database.rpc('process_request_workflow_action', {
+        p_request_id: requestId,
+        p_action: 'student_withdraw',
+        p_remarks: 'Withdrawn by student.',
+      });
+
+      if (rpcErr) {
+        console.warn('[StudentDashboard] Withdraw RPC fallback:', rpcErr);
+        const { error: updateErr } = await insforge.database
+          .from('participation_requests')
+          .update({
+            status: 'withdrawn',
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', requestId);
+
+        if (updateErr) throw new Error(updateErr.message);
+
+        await insforge.database.from('request_decision_history').insert([
+          {
+            request_id: requestId,
+            actor_id: user?.id,
+            actor_name: profile?.name || 'Student',
+            actor_role: 'student',
+            new_status: 'withdrawn',
+            action_type: 'withdrawn',
+            remarks: 'Withdrawn by student.',
+          },
+        ]);
+      }
+
+      await loadStudentData();
+    } catch (err: any) {
+      alert(`Withdrawal failed: ${err.message}`);
+    } finally {
+      setWithdrawLoading(null);
+    }
+  };
 
   if (loading) {
     return (
@@ -197,7 +249,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
             {requests.length}
           </div>
           <p className="text-xs text-slate-500 mt-2">
-            {requests.filter(r => r.status === 'approved' || r.status === 'approved_by_incharge').length} Approved &bull; {requests.filter(r => r.status.includes('pending') || r.status === 'submitted').length} In Review &bull; {requests.filter(r => r.status === 'draft').length} Drafts
+            {requests.filter(r => r.status === 'approved' || r.status === 'approved_by_incharge').length} Approved &bull; {requests.filter(r => r.status.includes('pending') || r.status === 'submitted' || r.status.includes('recommended')).length} In Review &bull; {requests.filter(r => r.status === 'draft').length} Drafts
           </p>
         </div>
       </div>
@@ -231,82 +283,144 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
           </div>
         ) : (
           <div className="divide-y divide-slate-800/80">
-            {requests.map((req: any) => (
-              <div key={req.id} className="py-5 flex flex-col lg:flex-row lg:items-center justify-between gap-6">
-                <div className="space-y-2">
-                  <div className="flex flex-wrap items-center gap-2.5">
-                    <span className="font-mono text-xs font-bold text-indigo-300 bg-indigo-950/60 px-2 py-0.5 rounded border border-indigo-800/40">
-                      {req.request_reference || `OD-${req.id.substring(0, 8)}`}
-                    </span>
-                    <h3 className="text-base font-bold text-white">
-                      {req.event?.title || 'External Technical Event'}
-                    </h3>
-                    <Badge status={req.status} size="sm" />
-                  </div>
+            {requests.map((req: any) => {
+              const isTerminal =
+                req.status === 'approved_by_incharge' ||
+                req.status === 'rejected_by_incharge' ||
+                req.status === 'withdrawn';
+              const isReturned = req.status === 'returned_for_correction';
 
-                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-400">
-                    <span>Role: <strong className="text-slate-200">{req.event_role}</strong></span>
-                    <span>&bull;</span>
-                    <span>
-                      Dates: <strong className="text-slate-200">{req.od_start_date || 'N/A'}</strong> to <strong className="text-slate-200">{req.od_end_date || 'N/A'}</strong> ({req.od_days_requested} Days)
-                    </span>
-                    <span>&bull;</span>
-                    <span>Submitted on: {new Date(req.created_at).toLocaleDateString()}</span>
-                  </div>
-
-                  {/* Submission Snapshot */}
-                  <div className="flex flex-wrap items-center gap-3 p-2.5 rounded-xl bg-slate-900/60 border border-slate-800 text-[11px] text-slate-400">
-                    <span className="font-semibold text-slate-300 flex items-center gap-1">
-                      <FileCheck2 className="w-3.5 h-3.5 text-indigo-400" />
-                      Submission Snapshot:
-                    </span>
-                    <span>
-                      Attendance: <strong className="text-white">{req.submission_attendance_percentage !== null && req.submission_attendance_percentage !== undefined ? `${req.submission_attendance_percentage}%` : 'Unavailable'}</strong>
-                    </span>
-                    <span>&bull;</span>
-                    <span>
-                      Result: <strong className="text-indigo-300 uppercase">{req.submission_eligibility_status || 'Pending'}</strong>
-                    </span>
-                    <span>&bull;</span>
-                    <span>Threshold Applied: {req.submission_threshold_applied || 75}%</span>
-                  </div>
-
-                  {/* Proctor Remarks */}
-                  {req.faculty_remarks && (
-                    <div className="text-xs text-sky-400/90 italic bg-sky-950/30 px-3 py-1.5 rounded-lg border border-sky-800/40 inline-flex items-center gap-2">
-                      <MessageSquare className="w-3.5 h-3.5 shrink-0" />
-                      <span>Proctor Endorsement: "{req.faculty_remarks}"</span>
+              return (
+                <div key={req.id} className="py-5 flex flex-col lg:flex-row lg:items-center justify-between gap-6">
+                  <div className="space-y-2.5 flex-1">
+                    <div className="flex flex-wrap items-center gap-2.5">
+                      <span className="font-mono text-xs font-bold text-indigo-300 bg-indigo-950/60 px-2 py-0.5 rounded border border-indigo-800/40">
+                        {req.request_reference || `OD-${req.id.substring(0, 8)}`}
+                      </span>
+                      <h3 className="text-base font-bold text-white">
+                        {req.event?.title || 'External Technical Event'}
+                      </h3>
+                      <Badge status={req.status} size="sm" />
+                      {req.resubmission_count && req.resubmission_count > 0 && (
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-500/10 text-purple-400 border border-purple-500/30">
+                          Resubmission #{req.resubmission_count}
+                        </span>
+                      )}
                     </div>
-                  )}
 
-                  {/* In-Charge Remarks */}
-                  {req.admin_remarks && (
-                    <div className="text-xs text-indigo-400/90 italic bg-indigo-950/30 px-3 py-1.5 rounded-lg border border-indigo-800/40 inline-flex items-center gap-2">
-                      <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
-                      <span>In-Charge Decision: "{req.admin_remarks}"</span>
+                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-400">
+                      <span>Role: <strong className="text-slate-200">{req.event_role}</strong></span>
+                      <span>&bull;</span>
+                      <span>
+                        Dates: <strong className="text-slate-200">{req.od_start_date || 'N/A'}</strong> to <strong className="text-slate-200">{req.od_end_date || 'N/A'}</strong> ({req.od_days_requested} Days)
+                      </span>
+                      <span>&bull;</span>
+                      <span>Submitted on: {new Date(req.created_at).toLocaleDateString()}</span>
                     </div>
-                  )}
-                </div>
 
-                {/* Document Vault Actions */}
-                <div className="flex items-center gap-2 shrink-0 self-end lg:self-center">
-                  {req.proof_document_key ? (
+                    {/* Correction Notice Banner */}
+                    {isReturned && (
+                      <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs flex items-start gap-2.5">
+                        <AlertTriangle className="w-4 h-4 shrink-0 text-amber-400 mt-0.5" />
+                        <div className="space-y-1">
+                          <div className="font-bold text-amber-200">
+                            Action Required: Application Returned for Correction
+                          </div>
+                          <p className="text-amber-300/90 leading-relaxed font-medium">
+                            {req.admin_remarks || req.faculty_remarks || 'Please update your application details and resubmit for review.'}
+                          </p>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Submission Snapshot */}
+                    <div className="flex flex-wrap items-center gap-3 p-2.5 rounded-xl bg-slate-900/60 border border-slate-800 text-[11px] text-slate-400">
+                      <span className="font-semibold text-slate-300 flex items-center gap-1">
+                        <FileCheck2 className="w-3.5 h-3.5 text-indigo-400" />
+                        Submission Snapshot:
+                      </span>
+                      <span>
+                        Attendance: <strong className="text-white">{req.submission_attendance_percentage !== null && req.submission_attendance_percentage !== undefined ? `${req.submission_attendance_percentage}%` : 'Unavailable'}</strong>
+                      </span>
+                      <span>&bull;</span>
+                      <span>
+                        Result: <strong className="text-indigo-300 uppercase">{req.submission_eligibility_status || 'Pending'}</strong>
+                      </span>
+                      <span>&bull;</span>
+                      <span>Threshold Applied: {req.submission_threshold_applied || 75}%</span>
+                    </div>
+
+                    {/* Proctor Remarks */}
+                    {req.faculty_remarks && !isReturned && (
+                      <div className="text-xs text-sky-400/90 italic bg-sky-950/30 px-3 py-1.5 rounded-lg border border-sky-800/40 inline-flex items-center gap-2">
+                        <MessageSquare className="w-3.5 h-3.5 shrink-0" />
+                        <span>Proctor Endorsement: &quot;{req.faculty_remarks}&quot;</span>
+                      </div>
+                    )}
+
+                    {/* In-Charge Remarks */}
+                    {req.admin_remarks && !isReturned && (
+                      <div className="text-xs text-indigo-400/90 italic bg-indigo-950/30 px-3 py-1.5 rounded-lg border border-indigo-800/40 inline-flex items-center gap-2">
+                        <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                        <span>In-Charge Decision: &quot;{req.admin_remarks}&quot;</span>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Actions Bar */}
+                  <div className="flex flex-wrap items-center gap-2 shrink-0 self-end lg:self-center">
+                    {/* View Vault Proof */}
+                    {req.proof_document_key ? (
+                      <button
+                        onClick={() => setViewerKey(req.proof_document_key)}
+                        className="px-3 py-2 rounded-xl text-xs font-semibold bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/30 flex items-center gap-1.5 transition-all"
+                      >
+                        <Eye className="w-3.5 h-3.5" />
+                        Vault Proof
+                      </button>
+                    ) : (
+                      <span className="text-xs text-amber-400 flex items-center gap-1 bg-amber-500/10 px-2.5 py-1.5 rounded-xl border border-amber-500/20">
+                        <AlertTriangle className="w-3.5 h-3.5" />
+                        Proof Pending
+                      </span>
+                    )}
+
+                    {/* Audit History Timeline */}
                     <button
-                      onClick={() => setViewerKey(req.proof_document_key)}
-                      className="px-3.5 py-2 rounded-xl text-xs font-semibold bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/30 flex items-center gap-1.5 transition-all"
+                      onClick={() => setSelectedAuditRequest(req)}
+                      className="px-3 py-2 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 flex items-center gap-1.5 transition-all"
                     >
-                      <Eye className="w-3.5 h-3.5" />
-                      View Vault Proof
+                      <History className="w-3.5 h-3.5 text-indigo-400" />
+                      Audit Trail
                     </button>
-                  ) : (
-                    <span className="text-xs text-amber-400 flex items-center gap-1 bg-amber-500/10 px-2.5 py-1.5 rounded-xl border border-amber-500/20">
-                      <AlertTriangle className="w-3.5 h-3.5" />
-                      Proof Pending
-                    </span>
-                  )}
+
+                    {/* Edit & Resubmit (When returned for correction) */}
+                    {isReturned && (
+                      <button
+                        onClick={() => setSelectedResubmitRequest(req)}
+                        className="px-3.5 py-2 rounded-xl text-xs font-bold bg-amber-600 hover:bg-amber-500 text-white flex items-center gap-1.5 shadow-md shadow-amber-600/30 transition-all active:scale-95"
+                      >
+                        <Edit3 className="w-3.5 h-3.5" />
+                        Edit & Resubmit
+                      </button>
+                    )}
+
+                    {/* Withdraw (When not yet finalized) */}
+                    {!isTerminal && (
+                      <button
+                        onClick={() => handleWithdraw(req.id)}
+                        disabled={withdrawLoading === req.id}
+                        className="px-3 py-2 rounded-xl text-xs font-semibold bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 flex items-center gap-1.5 transition-all active:scale-95 disabled:opacity-50"
+                        title="Withdraw this request"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5" />
+                        {withdrawLoading === req.id ? 'Withdrawing...' : 'Withdraw'}
+                      </button>
+                    )}
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
@@ -327,6 +441,26 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
           onClose={() => setShowApplyModal(false)}
           onSuccess={() => {
             setShowApplyModal(false);
+            loadStudentData();
+          }}
+        />
+      )}
+
+      {/* Decision Audit History Modal */}
+      {selectedAuditRequest && (
+        <DecisionHistoryModal
+          request={selectedAuditRequest}
+          onClose={() => setSelectedAuditRequest(null)}
+        />
+      )}
+
+      {/* Resubmit Modal */}
+      {selectedResubmitRequest && (
+        <ResubmitModal
+          request={selectedResubmitRequest}
+          onClose={() => setSelectedResubmitRequest(null)}
+          onSuccess={() => {
+            setSelectedResubmitRequest(null);
             loadStudentData();
           }}
         />

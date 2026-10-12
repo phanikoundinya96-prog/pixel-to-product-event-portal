@@ -22,12 +22,15 @@ import {
   Plus,
   FileText,
   ExternalLink,
-  Eye
+  Eye,
+  History,
+  MessageSquare
 } from 'lucide-react';
 import Badge from '@/components/common/Badge';
 import LoadingSpinner from '@/components/common/LoadingSpinner';
 import { CreateEventModal } from '@/components/events/CreateEventModal';
 import { DocumentViewerModal } from '@/components/common/DocumentViewerModal';
+import DecisionHistoryModal from '@/components/requests/DecisionHistoryModal';
 import { 
   parseCSV, 
   validateAttendanceCSV, 
@@ -50,6 +53,15 @@ export const InchargeDashboard: React.FC = () => {
   const [showCreateEventModal, setShowCreateEventModal] = useState(false);
   const [selectedProofKey, setSelectedProofKey] = useState<string | null>(null);
   const [selectedStudentName, setSelectedStudentName] = useState<string | null>(null);
+  const [selectedAuditRequest, setSelectedAuditRequest] = useState<ParticipationRequest | null>(null);
+  const [decisionModal, setDecisionModal] = useState<{
+    requestId: string;
+    studentName: string;
+    requestRef: string;
+    action: 'approve' | 'reject' | 'return';
+    remarks: string;
+  } | null>(null);
+  const [decisionError, setDecisionError] = useState<string | null>(null);
 
   // Institution settings state
   const [threshold, setThreshold] = useState<number>(75.0);
@@ -279,49 +291,73 @@ export const InchargeDashboard: React.FC = () => {
     }
   };
 
-  const handleDecision = async (
-    requestId: string,
-    action: 'approve' | 'reject',
-    remarks: string
-  ) => {
-    if (!user?.id) return;
+  const handleDecisionSubmit = async () => {
+    if (!decisionModal || !user?.id) return;
+    const { requestId, action, remarks } = decisionModal;
+    setDecisionError(null);
+
+    if ((action === 'reject' || action === 'return') && (!remarks || !remarks.trim())) {
+      setDecisionError(
+        action === 'reject'
+          ? 'Mandatory: Please provide a reason for the final rejection.'
+          : 'Mandatory: Please provide clear, actionable correction instructions for the student.'
+      );
+      return;
+    }
+
     setActionLoading(requestId);
-    const newStatus = action === 'approve' ? 'approved_by_incharge' : 'rejected_by_incharge';
+    const actionType =
+      action === 'approve'
+        ? 'incharge_approve'
+        : action === 'reject'
+        ? 'incharge_reject'
+        : 'incharge_return';
 
     try {
-      const { error: reqErr } = await insforge.database
-        .from('participation_requests')
-        .update({
-          status: newStatus,
-          incharge_id: user.id,
-          admin_reviewer_id: user.id,
-          admin_remarks: remarks,
-          admin_reviewed_at: new Date().toISOString(),
-        })
-        .eq('id', requestId);
+      const { error: rpcErr } = await insforge.database.rpc('process_request_workflow_action', {
+        p_request_id: requestId,
+        p_action: actionType,
+        p_remarks: remarks.trim() || 'Approved by Technical Event In-Charge. Official OD Granted.',
+      });
 
-      if (reqErr) {
-        alert(`Error updating request: ${reqErr.message}`);
-        setActionLoading(null);
-        return;
-      }
+      if (rpcErr) {
+        console.warn('[InchargeDashboard] RPC fallback to direct update:', rpcErr);
+        const newStatus =
+          action === 'approve'
+            ? 'approved_by_incharge'
+            : action === 'reject'
+            ? 'rejected_by_incharge'
+            : 'returned_for_correction';
 
-      await insforge.database
-        .from('request_decision_history')
-        .insert([
+        const { error: reqErr } = await insforge.database
+          .from('participation_requests')
+          .update({
+            status: newStatus,
+            incharge_id: user.id,
+            admin_reviewer_id: user.id,
+            admin_remarks: remarks.trim() || 'Approved by Technical Event In-Charge. OD Granted.',
+            incharge_reviewed_at: new Date().toISOString(),
+          })
+          .eq('id', requestId);
+
+        if (reqErr) throw new Error(reqErr.message);
+
+        await insforge.database.from('request_decision_history').insert([
           {
             request_id: requestId,
             actor_id: user.id,
             actor_name: profile?.name || 'In-Charge Admin',
             actor_role: 'incharge',
             new_status: newStatus,
-            remarks,
+            remarks: remarks.trim() || 'Final OD Decision recorded.',
           },
         ]);
+      }
 
+      setDecisionModal(null);
       await loadData();
     } catch (err: any) {
-      alert(`Unexpected error: ${err?.message}`);
+      alert(`Decision recording error: ${err.message}`);
     } finally {
       setActionLoading(null);
     }
@@ -751,23 +787,40 @@ export const InchargeDashboard: React.FC = () => {
       {/* Tab 2: Final Approvals */}
       {activeTab === 'requests' && (
         <div className="glass-panel rounded-2xl p-6 border border-slate-800">
-          <h2 className="text-lg font-bold text-white mb-6">
-            Proctor-Endorsed Requests Awaiting Final OD Grant
-          </h2>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
+            <div>
+              <h2 className="text-lg font-bold text-white">
+                Proctor-Reviewed Requests Awaiting Final OD Grant
+              </h2>
+              <p className="text-xs text-slate-400 mt-1">
+                Examine mentor recommendations, verify attendance snapshots, and record official In-Charge final decisions.
+              </p>
+            </div>
 
-          {requests.length === 0 ? (
+            <div className="flex items-center gap-2">
+              <span className="px-3 py-1 rounded-xl bg-amber-500/10 text-amber-400 text-xs font-bold border border-amber-500/20">
+                {pendingFinalDecisions.length} Pending Decision
+              </span>
+              <span className="px-3 py-1 rounded-xl bg-slate-800 text-slate-300 text-xs font-bold border border-slate-700">
+                {requests.length} Total
+              </span>
+            </div>
+          </div>
+
+          {pendingFinalDecisions.length === 0 ? (
             <div className="text-center py-16">
               <CheckCircle2 className="w-10 h-10 text-slate-600 mx-auto mb-2" />
-              <p className="text-sm text-slate-400 font-medium">All student participation requests are processed.</p>
+              <p className="text-sm text-slate-400 font-medium">All proctor-reviewed requests have been processed.</p>
+              <p className="text-xs text-slate-500 mt-1">New recommendations from proctors will arrive in this queue automatically.</p>
             </div>
           ) : (
             <div className="space-y-4">
-              {requests.map((req) => (
+              {pendingFinalDecisions.map((req) => (
                 <div
                   key={req.id}
                   className="glass-card rounded-2xl p-5 border border-slate-800 flex flex-col lg:flex-row lg:items-center justify-between gap-6"
                 >
-                  <div className="space-y-2">
+                  <div className="space-y-2.5">
                     <div className="flex flex-wrap items-center gap-2.5">
                       <h3 className="text-base font-bold text-white">{req.student_name}</h3>
                       <span className="text-xs font-mono text-slate-400">({req.roll_number})</span>
@@ -775,6 +828,19 @@ export const InchargeDashboard: React.FC = () => {
                         {req.request_reference || 'OD-REF'}
                       </span>
                       <Badge status={req.status} size="sm" />
+
+                      {/* Proctor Recommendation Pill */}
+                      {req.proctor_recommendation === 'recommended' ? (
+                        <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 flex items-center gap-1">
+                          <CheckCircle2 className="w-3 h-3" />
+                          Proctor Endorsed
+                        </span>
+                      ) : req.proctor_recommendation === 'rejected' ? (
+                        <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-rose-500/10 text-rose-400 border border-rose-500/30 flex items-center gap-1">
+                          <XCircle className="w-3 h-3" />
+                          Proctor Recommend Reject
+                        </span>
+                      ) : null}
                     </div>
 
                     <p className="text-xs text-slate-300">
@@ -789,28 +855,28 @@ export const InchargeDashboard: React.FC = () => {
                             ? `${req.submission_attendance_percentage}%`
                             : 'Unavailable'}
                         </strong>{' '}
-                        ({req.submission_eligibility_status || 'N/A'})
+                        ({req.submission_eligibility_status || 'N/A'}, threshold: {req.submission_threshold_applied ?? 75}%)
                       </span>
                       {req.od_start_date && (
                         <span>
-                          OD Dates: <strong className="text-slate-300">{req.od_start_date} to {req.od_end_date}</strong>
+                          &bull; OD Dates: <strong className="text-slate-300">{req.od_start_date} to {req.od_end_date}</strong>
                         </span>
                       )}
                     </div>
 
                     {req.faculty_remarks && (
-                      <p className="text-xs text-sky-400 bg-sky-950/40 p-2 rounded-lg border border-sky-800/40">
-                        <strong>Proctor Endorsement: </strong>"{req.faculty_remarks}"
+                      <p className="text-xs text-sky-400 bg-sky-950/40 p-2.5 rounded-xl border border-sky-800/40 max-w-2xl">
+                        <strong>Proctor Notes: </strong>&quot;{req.faculty_remarks}&quot;
                       </p>
                     )}
                   </div>
 
                   <div className="flex flex-wrap items-center gap-2 shrink-0">
                     {/* Vault Proof Document Viewer Button */}
-                    {(req.supporting_document_url || req.certificate_url) && (
+                    {(req.proof_document_key || req.proof_document_url || req.supporting_document_url || req.certificate_url) && (
                       <button
                         onClick={() => {
-                          setSelectedProofKey((req.supporting_document_url || req.certificate_url)!);
+                          setSelectedProofKey((req.proof_document_key || req.proof_document_url || req.supporting_document_url || req.certificate_url)!);
                           setSelectedStudentName(req.student_name);
                         }}
                         className="px-3 py-2 rounded-xl text-xs font-bold bg-slate-800 hover:bg-slate-700 text-indigo-400 border border-slate-700 flex items-center gap-1.5 transition-all"
@@ -820,9 +886,25 @@ export const InchargeDashboard: React.FC = () => {
                       </button>
                     )}
 
+                    {/* Audit History Timeline */}
+                    <button
+                      onClick={() => setSelectedAuditRequest(req)}
+                      className="px-3 py-2 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 flex items-center gap-1.5 transition-all"
+                    >
+                      <History className="w-3.5 h-3.5 text-indigo-400" />
+                      Audit Trail
+                    </button>
+
+                    {/* Grant Final OD */}
                     <button
                       onClick={() =>
-                        handleDecision(req.id, 'approve', 'Approved by Technical Event In-Charge. OD Granted.')
+                        setDecisionModal({
+                          requestId: req.id,
+                          studentName: req.student_name,
+                          requestRef: req.request_reference || 'OD-REF',
+                          action: 'approve',
+                          remarks: 'Approved by Technical Event In-Charge. Official OD Granted.',
+                        })
                       }
                       disabled={actionLoading === req.id}
                       className="px-4 py-2 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white flex items-center gap-1.5 shadow-md shadow-emerald-600/20 active:scale-95"
@@ -831,9 +913,34 @@ export const InchargeDashboard: React.FC = () => {
                       Grant Final OD
                     </button>
 
+                    {/* Return for Correction */}
                     <button
                       onClick={() =>
-                        handleDecision(req.id, 'reject', 'Rejected by Technical Event In-Charge.')
+                        setDecisionModal({
+                          requestId: req.id,
+                          studentName: req.student_name,
+                          requestRef: req.request_reference || 'OD-REF',
+                          action: 'return',
+                          remarks: '',
+                        })
+                      }
+                      disabled={actionLoading === req.id}
+                      className="px-3.5 py-2 rounded-xl text-xs font-bold bg-amber-600 hover:bg-amber-500 text-white flex items-center gap-1.5 active:scale-95"
+                    >
+                      <MessageSquare className="w-4 h-4" />
+                      Return
+                    </button>
+
+                    {/* Reject */}
+                    <button
+                      onClick={() =>
+                        setDecisionModal({
+                          requestId: req.id,
+                          studentName: req.student_name,
+                          requestRef: req.request_reference || 'OD-REF',
+                          action: 'reject',
+                          remarks: '',
+                        })
                       }
                       disabled={actionLoading === req.id}
                       className="px-4 py-2 rounded-xl text-xs font-bold bg-rose-600/20 hover:bg-rose-600/30 text-rose-300 border border-rose-500/30 flex items-center gap-1.5 active:scale-95"
@@ -1030,6 +1137,90 @@ export const InchargeDashboard: React.FC = () => {
             setSelectedProofKey(null);
             setSelectedStudentName(null);
           }}
+        />
+      )}
+
+      {/* Decision Confirmation Modal */}
+      {decisionModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+          <div className="glass-panel rounded-3xl p-6 max-w-md w-full border border-slate-700 shadow-2xl">
+            <h3 className="text-base font-bold text-white mb-1">
+              {decisionModal.action === 'approve'
+                ? 'Grant Final OD Approval'
+                : decisionModal.action === 'reject'
+                ? 'Reject OD Application'
+                : 'Return Application for Correction'}
+            </h3>
+            <p className="text-xs text-slate-400 mb-3">
+              Application <strong className="text-white">{decisionModal.requestRef}</strong> for {decisionModal.studentName}.
+              {decisionModal.action === 'approve'
+                ? ' This decision authorizes official OD attendance credit.'
+                : ' An immutable entry will be appended to the decision history.'}
+            </p>
+
+            {decisionError && (
+              <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs mb-3 flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4 shrink-0 text-rose-400" />
+                <span>{decisionError}</span>
+              </div>
+            )}
+
+            <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+              In-Charge Remarks / Instructions{' '}
+              {decisionModal.action !== 'approve' && <span className="text-rose-400">* (Required)</span>}
+            </label>
+            <textarea
+              rows={4}
+              value={decisionModal.remarks}
+              onChange={(e) => {
+                setDecisionModal({ ...decisionModal, remarks: e.target.value });
+                if (decisionError) setDecisionError(null);
+              }}
+              className="w-full p-3 rounded-xl bg-slate-900 border border-slate-700 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 mb-4"
+              placeholder={
+                decisionModal.action === 'approve'
+                  ? 'Add administrative remarks (optional)...'
+                  : decisionModal.action === 'reject'
+                  ? 'Specify mandatory reason for final rejection...'
+                  : 'Detail actionable corrections required from student (mandatory)...'
+              }
+            />
+
+            <div className="flex items-center justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  setDecisionModal(null);
+                  setDecisionError(null);
+                }}
+                className="px-4 py-2 rounded-xl text-xs font-semibold bg-slate-800 text-slate-300 hover:bg-slate-700"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleDecisionSubmit}
+                disabled={actionLoading !== null}
+                className={`px-4 py-2 rounded-xl text-xs font-bold text-white flex items-center gap-2 ${
+                  decisionModal.action === 'approve'
+                    ? 'bg-emerald-600 hover:bg-emerald-500 shadow-lg shadow-emerald-600/30'
+                    : decisionModal.action === 'reject'
+                    ? 'bg-rose-600 hover:bg-rose-500 shadow-lg shadow-rose-600/30'
+                    : 'bg-amber-600 hover:bg-amber-500 shadow-lg shadow-amber-600/30'
+                }`}
+              >
+                {actionLoading ? 'Recording...' : 'Confirm Decision'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Decision Audit History Modal */}
+      {selectedAuditRequest && (
+        <DecisionHistoryModal
+          request={selectedAuditRequest}
+          onClose={() => setSelectedAuditRequest(null)}
         />
       )}
     </div>
