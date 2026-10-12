@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import Badge from '@/components/common/Badge';
 import LoadingSpinner from '@/components/common/LoadingSpinner';
+import { evaluateEligibility } from '@/utils/eligibility';
 
 interface StudentDashboardProps {
   onNavigateToEvents: () => void;
@@ -81,8 +82,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onNavigateTo
     );
   }
 
-  const attendancePct = attendance ? attendance.attendance_percentage : null;
-  const isEligible = attendancePct !== null ? attendancePct >= 75.0 : false;
+  const eligibility = evaluateEligibility(attendance);
 
   return (
     <div className="space-y-8 py-6">
@@ -119,21 +119,25 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onNavigateTo
         {/* Attendance Eligibility Card */}
         <div className="glass-card rounded-2xl p-6 border border-slate-800">
           <div className="flex items-center justify-between mb-3">
-            <span className="text-xs font-semibold text-slate-400">Academic Attendance</span>
-            {attendancePct !== null ? (
-              <Badge status={isEligible ? 'eligible' : 'ineligible'} size="sm" />
-            ) : (
-              <Badge status="missing_data" size="sm" />
-            )}
+            <span className="text-xs font-semibold text-slate-400">Academic Eligibility</span>
+            <Badge status={eligibility.status} size="sm" />
           </div>
-          <div className="text-3xl font-extrabold text-white">
-            {attendancePct !== null ? `${attendancePct}%` : 'No Snapshot'}
+          <div className="flex items-baseline gap-2">
+            <span className="text-3xl font-extrabold text-white">
+              {eligibility.percentage !== null ? `${eligibility.percentage}%` : 'Unavailable'}
+            </span>
+            <span className="text-xs text-slate-400">
+              (Min: {eligibility.threshold}%)
+            </span>
           </div>
-          <p className="text-xs text-slate-500 mt-2">
-            {attendance
-              ? `${attendance.classes_attended} / ${attendance.classes_conducted} classes attended (Source: ${attendance.source_date})`
-              : 'Waiting for department attendance spreadsheet import.'}
+          <p className="text-xs text-slate-400 mt-2 font-medium">
+            {eligibility.message}
           </p>
+          {attendance && (
+            <p className="text-[11px] text-slate-500 mt-1">
+              Classes: {attendance.classes_attended} / {attendance.classes_conducted} &bull; Recorded on {attendance.source_date}
+            </p>
+          )}
         </div>
 
         {/* Proctor Mentor Card */}

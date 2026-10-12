@@ -17,7 +17,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onSuccess }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
-  const [role, setRole] = useState<UserRole>('student');
+  const role: UserRole = 'student';
   const [department, setDepartment] = useState('Computer Science & Engineering');
   const [rollNumber, setRollNumber] = useState('');
 
@@ -147,19 +147,9 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onSuccess }) => {
                 </div>
               </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                  Institutional Role
-                </label>
-                <select
-                  value={role}
-                  onChange={(e) => setRole(e.target.value as UserRole)}
-                  className="w-full px-3 py-2.5 rounded-xl bg-slate-900/90 border border-slate-800 text-sm text-white focus:outline-none focus:border-indigo-500"
-                >
-                  <option value="student">Student (Participation & OD Applicant)</option>
-                  <option value="proctor">Proctor / Faculty (Academic Mentor)</option>
-                  <option value="incharge">Technical-Event In-Charge (Admin)</option>
-                </select>
+              <div className="p-3 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-300 text-xs flex items-center justify-between">
+                <span>Account Type: <strong className="text-white">Student</strong> (OD & Event Applicant)</span>
+                <span className="text-[10px] text-slate-400">Institutional</span>
               </div>
 
               <div>
