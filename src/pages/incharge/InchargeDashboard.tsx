@@ -4,7 +4,8 @@ import insforge from '@/lib/insforge';
 import { 
   ParticipationRequest, 
   AcademicAttendanceImport, 
-  AcademicAttendanceRecord 
+  AcademicAttendanceRecord,
+  TechnicalEvent
 } from '@/types';
 import { 
   ShieldCheck, 
@@ -16,10 +17,17 @@ import {
   Search,
   AlertTriangle,
   FileCheck2,
-  Layers
+  Layers,
+  Calendar,
+  Plus,
+  FileText,
+  ExternalLink,
+  Eye
 } from 'lucide-react';
 import Badge from '@/components/common/Badge';
 import LoadingSpinner from '@/components/common/LoadingSpinner';
+import { CreateEventModal } from '@/components/events/CreateEventModal';
+import { DocumentViewerModal } from '@/components/common/DocumentViewerModal';
 import { 
   parseCSV, 
   validateAttendanceCSV, 
@@ -31,11 +39,17 @@ import { evaluateEligibility } from '@/utils/eligibility';
 export const InchargeDashboard: React.FC = () => {
   const { user, profile } = useAuth();
   const [requests, setRequests] = useState<ParticipationRequest[]>([]);
+  const [events, setEvents] = useState<TechnicalEvent[]>([]);
   const [imports, setImports] = useState<AcademicAttendanceImport[]>([]);
   const [attendanceRoster, setAttendanceRoster] = useState<AcademicAttendanceRecord[]>([]);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'requests' | 'attendance' | 'settings'>('attendance');
+  const [activeTab, setActiveTab] = useState<'requests' | 'attendance' | 'events' | 'settings'>('attendance');
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+
+  // Modal States
+  const [showCreateEventModal, setShowCreateEventModal] = useState(false);
+  const [selectedProofKey, setSelectedProofKey] = useState<string | null>(null);
+  const [selectedStudentName, setSelectedStudentName] = useState<string | null>(null);
 
   // Institution settings state
   const [threshold, setThreshold] = useState<number>(75.0);
@@ -101,6 +115,14 @@ export const InchargeDashboard: React.FC = () => {
       } else {
         setAttendanceRoster([]);
       }
+
+      // 5. Fetch all technical events
+      const { data: evData } = await insforge.database
+        .from('events')
+        .select('*')
+        .order('start_date', { ascending: false });
+
+      setEvents((evData as TechnicalEvent[]) || []);
     } catch (err) {
       console.error('[InchargeDashboard] Data loading error:', err);
     } finally {
@@ -368,7 +390,7 @@ export const InchargeDashboard: React.FC = () => {
         </div>
 
         {/* Tab Switcher */}
-        <div className="flex rounded-xl bg-slate-900 p-1 border border-slate-800 self-start md:self-center">
+        <div className="flex flex-wrap rounded-xl bg-slate-900 p-1 border border-slate-800 self-start md:self-center gap-1">
           <button
             onClick={() => setActiveTab('attendance')}
             className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
@@ -388,6 +410,16 @@ export const InchargeDashboard: React.FC = () => {
             }`}
           >
             Final Approvals ({pendingFinalDecisions.length})
+          </button>
+          <button
+            onClick={() => setActiveTab('events')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+              activeTab === 'events'
+                ? 'bg-indigo-600 text-white shadow-md'
+                : 'text-slate-400 hover:text-white'
+            }`}
+          >
+            Events ({events.length})
           </button>
           <button
             onClick={() => setActiveTab('settings')}
@@ -736,15 +768,35 @@ export const InchargeDashboard: React.FC = () => {
                   className="glass-card rounded-2xl p-5 border border-slate-800 flex flex-col lg:flex-row lg:items-center justify-between gap-6"
                 >
                   <div className="space-y-2">
-                    <div className="flex items-center gap-3">
+                    <div className="flex flex-wrap items-center gap-2.5">
                       <h3 className="text-base font-bold text-white">{req.student_name}</h3>
                       <span className="text-xs font-mono text-slate-400">({req.roll_number})</span>
+                      <span className="px-2 py-0.5 rounded-md bg-indigo-500/10 text-indigo-400 font-mono text-[11px] font-bold border border-indigo-500/20">
+                        {req.request_reference || 'OD-REF'}
+                      </span>
                       <Badge status={req.status} size="sm" />
                     </div>
 
                     <p className="text-xs text-slate-300">
                       Event: <strong className="text-white">{req.event?.title || 'Technical Event'}</strong> &bull; Dept: {req.department} &bull; Days: {req.od_days_requested}
                     </p>
+
+                    <div className="flex flex-wrap items-center gap-3 text-xs text-slate-400">
+                      <span>
+                        Submission Snapshot:{' '}
+                        <strong className="text-white">
+                          {req.submission_attendance_percentage !== null && req.submission_attendance_percentage !== undefined
+                            ? `${req.submission_attendance_percentage}%`
+                            : 'Unavailable'}
+                        </strong>{' '}
+                        ({req.submission_eligibility_status || 'N/A'})
+                      </span>
+                      {req.od_start_date && (
+                        <span>
+                          OD Dates: <strong className="text-slate-300">{req.od_start_date} to {req.od_end_date}</strong>
+                        </span>
+                      )}
+                    </div>
 
                     {req.faculty_remarks && (
                       <p className="text-xs text-sky-400 bg-sky-950/40 p-2 rounded-lg border border-sky-800/40">
@@ -753,7 +805,21 @@ export const InchargeDashboard: React.FC = () => {
                     )}
                   </div>
 
-                  <div className="flex items-center gap-2 shrink-0">
+                  <div className="flex flex-wrap items-center gap-2 shrink-0">
+                    {/* Vault Proof Document Viewer Button */}
+                    {(req.supporting_document_url || req.certificate_url) && (
+                      <button
+                        onClick={() => {
+                          setSelectedProofKey((req.supporting_document_url || req.certificate_url)!);
+                          setSelectedStudentName(req.student_name);
+                        }}
+                        className="px-3 py-2 rounded-xl text-xs font-bold bg-slate-800 hover:bg-slate-700 text-indigo-400 border border-slate-700 flex items-center gap-1.5 transition-all"
+                      >
+                        <Eye className="w-3.5 h-3.5" />
+                        Vault Proof
+                      </button>
+                    )}
+
                     <button
                       onClick={() =>
                         handleDecision(req.id, 'approve', 'Approved by Technical Event In-Charge. OD Granted.')
@@ -841,6 +907,130 @@ export const InchargeDashboard: React.FC = () => {
             </button>
           </form>
         </div>
+      )}
+
+      {/* Tab 3: Technical Events Directory & Publishing */}
+      {activeTab === 'events' && (
+        <div className="space-y-6">
+          <div className="glass-panel rounded-3xl p-6 sm:p-8 border border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div>
+              <h2 className="text-lg font-bold text-white flex items-center gap-2">
+                <Calendar className="w-5 h-5 text-indigo-400" />
+                Technical Events Management
+              </h2>
+              <p className="text-xs text-slate-400 mt-1">
+                Publish upcoming hackathons, symposiums and conferences with official brochures for student applications.
+              </p>
+            </div>
+
+            <button
+              onClick={() => setShowCreateEventModal(true)}
+              className="px-4 py-2.5 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-500 text-white flex items-center gap-2 shadow-lg shadow-indigo-600/30 active:scale-95"
+            >
+              <Plus className="w-4 h-4" />
+              Publish New Event
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {events.map((ev) => {
+              const isPastDeadline = ev.registration_deadline
+                ? new Date(ev.registration_deadline) < new Date()
+                : false;
+
+              return (
+                <div
+                  key={ev.id}
+                  className="glass-card rounded-2xl p-5 border border-slate-800 flex flex-col justify-between space-y-4 hover:border-slate-700 transition-all"
+                >
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
+                        {ev.category}
+                      </span>
+                      <span className="text-[11px] font-medium text-slate-400">
+                        {ev.event_mode}
+                      </span>
+                    </div>
+
+                    <h3 className="text-base font-bold text-white line-clamp-1">{ev.title}</h3>
+                    <p className="text-xs text-slate-400 line-clamp-2">{ev.description}</p>
+
+                    <div className="text-xs text-slate-300 space-y-1 pt-2 border-t border-slate-800/80">
+                      <div>
+                        Organizer: <span className="font-semibold text-white">{ev.organizer_name}</span>
+                      </div>
+                      <div>
+                        Venue: <span className="text-slate-400">{ev.venue}</span>
+                      </div>
+                      <div>
+                        Dates: <span className="text-slate-400">{ev.start_date} to {ev.end_date}</span>
+                      </div>
+                      {ev.registration_deadline && (
+                        <div className="flex items-center gap-2">
+                          <span>Deadline: {ev.registration_deadline}</span>
+                          {isPastDeadline ? (
+                            <span className="text-[10px] text-rose-400 font-bold bg-rose-500/10 px-1.5 py-0.5 rounded">
+                              Closed
+                            </span>
+                          ) : (
+                            <span className="text-[10px] text-emerald-400 font-bold bg-emerald-500/10 px-1.5 py-0.5 rounded">
+                              Open
+                            </span>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between pt-3 border-t border-slate-800 text-xs">
+                    {ev.brochure_url ? (
+                      <a
+                        href={ev.brochure_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-indigo-400 hover:text-indigo-300 font-semibold flex items-center gap-1"
+                      >
+                        <FileText className="w-3.5 h-3.5" />
+                        Brochure
+                        <ExternalLink className="w-3 h-3" />
+                      </a>
+                    ) : (
+                      <span className="text-slate-500">No brochure</span>
+                    )}
+
+                    <span className="text-[11px] text-slate-500">
+                      Max: {ev.max_participants}
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Create Event Modal */}
+      {showCreateEventModal && (
+        <CreateEventModal
+          onClose={() => setShowCreateEventModal(false)}
+          onSuccess={() => {
+            setShowCreateEventModal(false);
+            loadData();
+          }}
+        />
+      )}
+
+      {/* Document Vault Viewer Modal */}
+      {selectedProofKey && (
+        <DocumentViewerModal
+          objectKey={selectedProofKey}
+          studentName={selectedStudentName || undefined}
+          onClose={() => {
+            setSelectedProofKey(null);
+            setSelectedStudentName(null);
+          }}
+        />
       )}
     </div>
   );

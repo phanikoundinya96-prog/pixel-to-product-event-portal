@@ -86,6 +86,8 @@ export interface ParticipationRequest {
   team_members?: string[] | null;
   proof_document_url?: string | null;
   proof_document_key?: string | null;
+  supporting_document_url?: string | null;
+  certificate_url?: string | null;
   status: RequestStatus;
   current_attendance_percentage?: number | null;
   eligibility_status?: EligibilityStatus;
@@ -104,6 +106,17 @@ export interface ParticipationRequest {
   incharge_reviewed_at?: string | null;
   resubmission_count: number;
   od_days_requested: number;
+  request_reference?: string | null;
+  event_website_url?: string | null;
+  event_city?: string | null;
+  od_start_date?: string | null;
+  od_end_date?: string | null;
+  submission_attendance_percentage?: number | null;
+  submission_eligibility_status?: string | null;
+  submission_threshold_applied?: number | null;
+  submission_source_date?: string | null;
+  submission_import_id?: string | null;
+  submission_checked_at?: string | null;
   created_at: string;
   updated_at: string;
   // Joined relation fields

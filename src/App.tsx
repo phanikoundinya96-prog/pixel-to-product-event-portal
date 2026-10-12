@@ -14,7 +14,7 @@ import { ShieldAlert } from 'lucide-react';
 const AppContent: React.FC = () => {
   const { user, role } = useAuth();
   const [currentView, setCurrentView] = useState<string>('home');
-  const [, setSelectedEventForApply] = useState<TechnicalEvent | null>(null);
+  const [selectedEventForApply, setSelectedEventForApply] = useState<TechnicalEvent | null>(null);
 
   const handleApply = (event: TechnicalEvent) => {
     setSelectedEventForApply(event);
@@ -59,7 +59,12 @@ const AppContent: React.FC = () => {
             </div>
           );
         }
-        return <StudentDashboard onNavigateToEvents={() => setCurrentView('events')} />;
+        return (
+          <StudentDashboard
+            initialEvent={selectedEventForApply}
+            onNavigateToEvents={() => setCurrentView('events')}
+          />
+        );
 
       case 'proctor':
         if (!user || (role !== 'proctor' && role !== 'faculty' && role !== 'incharge' && role !== 'admin')) {

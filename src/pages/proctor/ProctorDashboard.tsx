@@ -8,16 +8,18 @@ import {
   CheckCircle2, 
   XCircle, 
   MessageSquare, 
-  ExternalLink
+  Eye
 } from 'lucide-react';
 import Badge from '@/components/common/Badge';
 import LoadingSpinner from '@/components/common/LoadingSpinner';
+import DocumentViewerModal from '@/components/common/DocumentViewerModal';
 
 export const ProctorDashboard: React.FC = () => {
   const { user, profile } = useAuth();
   const [requests, setRequests] = useState<ParticipationRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [viewerKey, setViewerKey] = useState<string | null>(null);
   const [remarksModal, setRemarksModal] = useState<{
     requestId: string;
     action: 'recommend' | 'reject' | 'changes';
@@ -191,16 +193,14 @@ export const ProctorDashboard: React.FC = () => {
 
                 {/* Actions */}
                 <div className="flex flex-wrap items-center gap-2 lg:self-center shrink-0">
-                  {req.proof_document_url && (
-                    <a
-                      href={req.proof_document_url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="px-3 py-2 rounded-xl text-xs font-semibold bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-700 flex items-center gap-1.5"
+                  {req.proof_document_key && (
+                    <button
+                      onClick={() => setViewerKey(req.proof_document_key || null)}
+                      className="px-3.5 py-2 rounded-xl text-xs font-semibold bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/30 flex items-center gap-1.5 transition-all"
                     >
-                      <ExternalLink className="w-3.5 h-3.5" />
-                      Proof
-                    </a>
+                      <Eye className="w-3.5 h-3.5" />
+                      View Vault Proof
+                    </button>
                   )}
 
                   <button
@@ -291,6 +291,15 @@ export const ProctorDashboard: React.FC = () => {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Document Vault Viewer Modal */}
+      {viewerKey && (
+        <DocumentViewerModal
+          objectKey={viewerKey}
+          title="Student Proof Document"
+          onClose={() => setViewerKey(null)}
+        />
       )}
     </div>
   );
